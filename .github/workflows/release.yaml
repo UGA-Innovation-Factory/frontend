@@ -49,10 +49,6 @@ jobs:
           LOKALISE_TOKEN: ${{ secrets.LOKALISE_TOKEN }}
       - name: Build and release package
         run: |
-          python3 -m pip install twine build
-          export TWINE_USERNAME="__token__"
-          export TWINE_PASSWORD="${{ secrets.TWINE_TOKEN }}"
-          export SKIP_FETCH_NIGHTLY_TRANSLATIONS=1
           script/release
 
       - name: Upload release assets
