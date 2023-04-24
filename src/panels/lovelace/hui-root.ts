@@ -26,7 +26,7 @@ import {
   PropertyValues,
   TemplateResult,
 } from "lit";
-import { customElement, property, query, state } from "lit/decorators";
+import { customElement, property, state } from "lit/decorators";
 import { classMap } from "lit/directives/class-map";
 import { ifDefined } from "lit/directives/if-defined";
 import memoizeOne from "memoize-one";
@@ -86,8 +86,6 @@ class HUIRoot extends LitElement {
   };
 
   @state() private _curView?: number | "hass-unused-entities";
-
-  @query("#view", true) _viewRoot!: HTMLDivElement;
 
   private _viewCache?: { [viewId: string]: HUIView };
 
@@ -549,8 +547,8 @@ class HUIRoot extends LitElement {
     `;
   }
 
-  private _viewScrolled = (ev) => {
-    this.toggleAttribute("scrolled", ev.currentTarget.scrollTop !== 0);
+  private _handleWindowScroll = () => {
+    this.toggleAttribute("scrolled", window.scrollY !== 0);
   };
 
   private _isVisible = (view: LovelaceViewConfig) =>
@@ -562,7 +560,8 @@ class HUIRoot extends LitElement {
           view.visible.some((show) => show.user === this.hass!.user?.id))
     );
 
-  protected firstUpdated() {
+  protected firstUpdated(changedProps: PropertyValues) {
+    super.firstUpdated(changedProps);
     // Check for requested edit mode
     const searchParams = extractSearchParamsObject();
     if (searchParams.edit === "1") {
@@ -575,6 +574,14 @@ class HUIRoot extends LitElement {
         constructUrlCurrentPath(removeSearchParam("conversation"))
       );
     }
+    window.addEventListener("scroll", this._handleWindowScroll, {
+      passive: true,
+    });
+  }
+
+  public disconnectedCallback(): void {
+    super.disconnectedCallback();
+    window.removeEventListener("scroll", this._handleWindowScroll);
   }
 
   protected updated(changedProperties: PropertyValues): void {
@@ -617,6 +624,9 @@ class HUIRoot extends LitElement {
         }
         newSelectView = index;
       }
+
+      // Will allow to override history scroll restoration when using back button
+      setTimeout(() => scrollTo({ behavior: "auto", top: 0 }), 1);
     }
 
     if (changedProperties.has("lovelace")) {
@@ -671,6 +681,10 @@ class HUIRoot extends LitElement {
 
   private get _editMode() {
     return this.lovelace!.editMode;
+  }
+
+  private get _viewRoot(): HTMLDivElement {
+    return this.shadowRoot!.getElementById("view") as HTMLDivElement;
   }
 
   private get _showButtonMenu(): boolean {
@@ -728,12 +742,14 @@ class HUIRoot extends LitElement {
     const curViewConfig =
       typeof this._curView === "number" ? views[this._curView] : undefined;
 
-    if (curViewConfig?.back_path) {
-      navigate(curViewConfig.back_path);
+    if (curViewConfig?.back_path != null) {
+      navigate(curViewConfig.back_path, { replace: true });
     } else if (history.length > 1) {
       history.back();
+    } else if (!views[0].subview) {
+      navigate(this.route!.prefix, { replace: true });
     } else {
-      navigate(this.route!.prefix);
+      navigate("/");
     }
   }
 
@@ -802,13 +818,14 @@ class HUIRoot extends LitElement {
   }
 
   private _navigateToView(path: string | number, replace?: boolean) {
-    if (!this.lovelace!.editMode) {
-      navigate(`${this.route!.prefix}/${path}${location.search}`, { replace });
-      return;
+    const url = this.lovelace!.editMode
+      ? `${this.route!.prefix}/${path}?${addSearchParam({ edit: "1" })}`
+      : `${this.route!.prefix}/${path}${location.search}`;
+
+    const currentUrl = `${location.pathname}${location.search}`;
+    if (currentUrl !== url) {
+      navigate(url, { replace });
     }
-    navigate(`${this.route!.prefix}/${path}?${addSearchParam({ edit: "1" })}`, {
-      replace,
-    });
   }
 
   private _editView() {
@@ -853,11 +870,13 @@ class HUIRoot extends LitElement {
   }
 
   private _handleViewSelected(ev) {
+    ev.preventDefault();
     const viewIndex = ev.detail.selected as number;
-
     if (viewIndex !== this._curView) {
       const path = this.config.views[viewIndex].path || viewIndex;
       this._navigateToView(path);
+    } else if (!this._editMode) {
+      scrollTo({ behavior: "smooth", top: 0 });
     }
   }
 
@@ -878,7 +897,6 @@ class HUIRoot extends LitElement {
     const root = this._viewRoot;
 
     if (root.lastChild) {
-      root.lastChild.removeEventListener("scroll", this._viewScrolled);
       root.removeChild(root.lastChild);
     }
 
@@ -913,7 +931,6 @@ class HUIRoot extends LitElement {
     view.lovelace = this.lovelace;
     view.hass = this.hass;
     view.narrow = this.narrow;
-    view.addEventListener("scroll", this._viewScrolled, { passive: true });
 
     const configBackground = viewConfig.background || this.config.background;
 
@@ -922,7 +939,6 @@ class HUIRoot extends LitElement {
     } else {
       this.style.removeProperty("--lovelace-background");
     }
-    this.removeAttribute("scrolled");
 
     root.appendChild(view);
     // Recalculate to see if we need to adjust content area for tab bar
@@ -1033,29 +1049,29 @@ class HUIRoot extends LitElement {
         mwc-button.warning:not([disabled]) {
           color: var(--error-color);
         }
-        hui-view {
-          margin-top: calc(var(--header-height) + env(safe-area-inset-top));
-          height: calc(100vh - var(--header-height) - env(safe-area-inset-top));
+        #view {
+          position: relative;
+          display: flex;
           background: var(
             --lovelace-background,
             var(--primary-background-color)
           );
+          padding-top: calc(var(--header-height) + env(safe-area-inset-top));
+          min-height: 100vh;
+          box-sizing: border-box;
           padding-left: env(safe-area-inset-left);
           padding-right: env(safe-area-inset-right);
-          width: 100%;
           padding-bottom: env(safe-area-inset-bottom);
-          display: block;
-          overflow: auto;
-          transform: translateZ(0);
+        }
+        hui-view {
+          flex: 1 1 100%;
+          max-width: 100%;
         }
         /**
          * In edit mode we have the tab bar on a new line *
          */
         .edit-mode #view {
-          height: calc(
-            100vh - var(--header-height) - 48px - env(safe-area-inset-top)
-          );
-          margin-top: calc(
+          padding-top: calc(
             var(--header-height) + 48px + env(safe-area-inset-top)
           );
         }
